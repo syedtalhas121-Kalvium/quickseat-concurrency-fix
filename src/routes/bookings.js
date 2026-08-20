@@ -1,23 +1,15 @@
-// src/routes/bookings.js
-
 const express = require('express');
-const router  = express.Router();
+const { PrismaClient } = require('@prisma/client');
 const bookingService = require('../services/bookingService');
+const { bookingLimiter } = require('../middleware/rateLimiter');
 
-// ❌ FLAW 1: No rate limiter on this route.
-//
-// Any IP can send unlimited requests per second.
-// A bot or a double-click can flood this endpoint and exhaust
-// your server's resources before a single real user gets through.
-//
-// Fix required:
-//   - Install express-rate-limit
-//   - Create src/middleware/rateLimiter.js
-//   - Apply bookingLimiter as middleware before this handler
+const router = express.Router();
+const prisma = new PrismaClient();
 
 // POST /api/bookings/book
-// Books a seat for a show on behalf of a user
-router.post('/book', async (req, res, next) => {
+// The database unique constraint is the source of truth for seat ownership.
+// The limiter protects the endpoint from request floods before the handler runs.
+router.post('/book', bookingLimiter, async (req, res, next) => {
   try {
     const { userId, seatId, showId } = req.body;
 
@@ -37,19 +29,16 @@ router.post('/book', async (req, res, next) => {
       return res.status(result.status).json({ message: result.message });
     }
 
-    res.status(201).json(result.booking);
+    return res.status(201).json(result.booking);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
 // GET /api/bookings/show/:showId
-// Returns all bookings for a show — useful for verifying race condition results
+// Returns all bookings for a show — useful for verifying concurrency behavior.
 router.get('/show/:showId', async (req, res, next) => {
   try {
-    const { PrismaClient } = require('@prisma/client');
-    const prisma = new PrismaClient();
-
     const bookings = await prisma.booking.findMany({
       where: { showId: Number(req.params.showId) },
       include: {
@@ -59,13 +48,14 @@ router.get('/show/:showId', async (req, res, next) => {
       orderBy: { createdAt: 'asc' }
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       total: bookings.length,
       bookings
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
 module.exports = router;
+

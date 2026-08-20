@@ -1,16 +1,18 @@
 {
-  "name": "quickseat-concurrency-broken",
+  "name": "quickseat-concurrency-fix",
   "version": "1.0.0",
-  "description": "QuickSeat flash sale booking API — broken starter for the concurrency challenge",
+  "description": "QuickSeat flash sale booking API with concurrency-safe booking and flood protection",
   "main": "src/app.js",
   "scripts": {
     "dev": "nodemon src/app.js",
-    "start": "node src/app.js"
+    "start": "node src/app.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@prisma/client": "^5.7.0",
+    "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "dotenv": "^16.3.1"
+    "express-rate-limit": "^7.5.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2",

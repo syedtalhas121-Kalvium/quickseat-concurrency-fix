@@ -1,64 +1,50 @@
-# QuickSeat — Concurrency Challenge (Broken Starter)
+# QuickSeat — Concurrency-Safe Booking API
 
-**QuickSeat** is a flash sale seat booking API. When a popular event goes live, thousands of users hit the booking endpoint simultaneously.
+QuickSeat is a flash-sale seat booking API designed for high-contention booking windows. The implementation uses two complementary defenses: an IP-based rate limiter protects server resources from request floods, while a PostgreSQL composite unique constraint makes it impossible to store the same seat twice for one show.
 
-This repository contains a **deliberately broken implementation**. Your job is to identify the two flaws, apply the two-layer defence strategy, and document your understanding.
+## Defense Layers
 
----
-
-## The Two Flaws
-
-| Flaw | File | What's missing |
+| Layer | Implementation | Responsibility |
 |---|---|---|
-| No rate limiter | `src/routes/bookings.js` | Any IP can send unlimited requests per second |
-| No unique constraint | `prisma/schema.prisma` | Two concurrent inserts for the same seat can both succeed |
+| Request protection | `src/middleware/rateLimiter.js` | Allows at most 10 booking attempts per IP per 60-second window and returns `429 Too Many Requests` after the limit. |
+| Data integrity | `@@unique([seatId, showId])` in `prisma/schema.prisma` | Atomically rejects a competing insert for an already-booked seat and surfaces Prisma error `P2002`. |
+| Conflict handling | `src/services/bookingService.js` | Converts the expected `P2002` constraint violation into a clear `409 Conflict` result and rethrows unexpected errors. |
 
----
+The route no longer performs a `findFirst()` check before inserting. A check followed by an insert has a race window: two concurrent requests can both observe an available seat. The database constraint is the source of truth for ownership.
 
 ## Setup
 
-### 1. Install dependencies
+Install dependencies and configure PostgreSQL:
 
 ```bash
 npm install
-```
-
-### 2. Configure environment
-
-```bash
 cp .env.example .env
-# Edit .env with your PostgreSQL connection string
 ```
 
-### 3. Run the database migration
+Set `DATABASE_URL` in `.env`, then create and apply the migration:
 
 ```bash
-npx prisma migrate dev --name init
-```
-
-### 4. Seed sample data
-
-```bash
+npx prisma migrate dev --name add-booking-unique-constraint
 node prisma/seed.js
 ```
 
-### 5. Start the server
+Start the API with:
 
 ```bash
 npm run dev
 ```
 
----
+The default port is `3000` and can be changed through `PORT`.
 
 ## API Endpoints
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/bookings/book` | Book a seat for a show |
-| `GET` | `/api/bookings/show/:showId` | List all bookings for a show |
-| `GET` | `/health` | Health check |
+| `GET` | `/health` | Returns the service health status. |
+| `POST` | `/api/bookings/book` | Books a seat for a show. |
+| `GET` | `/api/bookings/show/:showId` | Lists all bookings for a show. |
 
-### Book a seat — request body
+A booking request has the following shape:
 
 ```json
 {
@@ -68,60 +54,33 @@ npm run dev
 }
 ```
 
----
+A successful booking returns `201 Created`. Booking the same `(seatId, showId)` again returns `409 Conflict`. Sending more than ten booking attempts from one IP in a minute returns `429 Too Many Requests`.
 
-## Observing the Race Condition
+## Verification
 
-To see the flaw in action, send two simultaneous requests for the same seat:
-
-**Using curl in two terminal windows at the same time:**
+The automated tests cover the limiter threshold and the service’s `P2002` mapping:
 
 ```bash
-# Terminal 1
-curl -X POST http://localhost:3000/api/bookings/book \
-  -H "Content-Type: application/json" \
-  -d '{"userId": 1, "seatId": 1, "showId": 1}'
-
-# Terminal 2 — run this at the same time as Terminal 1
-curl -X POST http://localhost:3000/api/bookings/book \
-  -H "Content-Type: application/json" \
-  -d '{"userId": 2, "seatId": 1, "showId": 1}'
+npm test
 ```
 
-Both will return `201 Created`. Then check the bookings:
+A real database verification can exercise the concurrent race with two requests sent together:
 
 ```bash
-curl http://localhost:3000/api/bookings/show/1
+(curl -sS -o /tmp/a.json -w 'request-a: %{http_code}\n' \
+  -X POST http://localhost:3000/api/bookings/book \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":1,"seatId":2,"showId":1}' &
+ curl -sS -o /tmp/b.json -w 'request-b: %{http_code}\n' \
+  -X POST http://localhost:3000/api/bookings/book \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":2,"seatId":2,"showId":1}' &
+ wait)
 ```
 
-You'll see two bookings for the same seat. This is the race condition.
+For the same seat and show, the expected result is one `201` response and one `409` response. The database will contain exactly one booking for that seat.
 
----
+## Submission Contents
 
-## Your Tasks
+The repository includes the repaired route, service, middleware, Prisma migration, concurrency explanation, automated tests, and application entry point. The feature branch for the submission is `fix/concurrency-and-rate-limit`.
 
-1. **Add a rate limiter** — create `src/middleware/rateLimiter.js` using `express-rate-limit` and apply it to `POST /book`
-2. **Add a unique constraint** — add `@@unique([seatId, showId])` to the `Booking` model in `prisma/schema.prisma` and run `npx prisma migrate dev`
-3. **Catch P2002** — update `src/services/bookingService.js` to catch `PrismaClientKnownRequestError` with `err.code === 'P2002'` and return `409 Conflict`
-4. **Remove findFirst()** — the check-then-insert pattern provides false security; remove it
-5. **Fill in `concurrency-explainer.md`** — explain the root cause and your fixes in your own words
-6. **Push to your own repo and create a PR**
-
----
-
-## Sample Data Reference
-
-After seeding, you have:
-
-| Resource | Details |
-|---|---|
-| Users | Alice (id: 1), Bob (id: 2) |
-| Show | Coldplay Live 2025 (id: 1) |
-| Seats | A1–A5 (id: 1–5) |
-
----
-
-## Submission
-
-- GitHub PR link (from `fix/concurrency-and-rate-limit` branch to `main`)
-- Video explanation (3–5 minutes, uploaded to Google Drive with public access)
