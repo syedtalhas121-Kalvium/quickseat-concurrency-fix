@@ -51,8 +51,6 @@ model Booking {
 
   createdAt DateTime @default(now())
 
-  // ❌ FLAW 2: No @@unique constraint here.
-  // Two concurrent inserts for the same (seatId, showId) will both succeed.
-  // The database has no way to reject the second one.
-  // Add @@unique([seatId, showId]) to fix this.
+  // Seat ownership is unique within a show. The database enforces this atomically.
+  @@unique([seatId, showId])
 }
